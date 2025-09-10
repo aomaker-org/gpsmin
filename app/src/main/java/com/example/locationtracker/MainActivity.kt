@@ -1,112 +1,131 @@
 package com.example.locationtracker
 
 import android.Manifest
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Observer
+import androidx.work.*
 import com.example.locationtracker.databinding.ActivityMainBinding
+import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
-    private var isServiceRunning = false
+    private lateinit var workManager: WorkManager
+    private var isWorkScheduled = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        workManager = WorkManager.getInstance(applicationContext)
 
         binding.toggleButton.setOnClickListener {
-            if (isServiceRunning) {
-                stopLocationService()
+            if (isWorkScheduled) {
+                cancelLocationWork()
             } else {
-                checkPermissionsAndStartService()
+                checkPermissionsAndStartWork()
             }
         }
+        observeWorkStatus()
     }
 
-    private fun checkPermissionsAndStartService() {
+    private fun checkPermissionsAndStartWork() {
         if (hasFineLocationPermission()) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 if (hasBackgroundLocationPermission()) {
-                    startLocationService()
+                    scheduleLocationWork()
                 } else {
                     requestBackgroundLocationPermission()
                 }
             } else {
-                startLocationService()
+                scheduleLocationWork()
             }
         } else {
             requestFineLocationPermission()
         }
     }
 
-    private fun startLocationService() {
-        Log.d(TAG, "Starting service")
-        val serviceIntent = Intent(this, LocationService::class.java).apply {
-            action = LocationService.ACTION_START
+    private fun scheduleLocationWork() {
+        Log.d(TAG, "Scheduling work")
+        try {
+            val config = ConfigLoader(this).loadConfig()
+            val periodicWorkRequest = PeriodicWorkRequestBuilder<LocationWorker>(
+                config.loggingIntervalMinutes, TimeUnit.MINUTES
+            )
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .addTag(LOCATION_WORK_TAG)
+                .build()
+
+            workManager.enqueueUniquePeriodicWork(
+                LOCATION_WORK_TAG,
+                ExistingPeriodicWorkPolicy.KEEP,
+                periodicWorkRequest
+            )
+            Toast.makeText(this, "Location tracking scheduled.", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load config or schedule work", e)
+            Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_LONG).show()
         }
-        startService(serviceIntent)
-        isServiceRunning = true
-        updateUI()
     }
 
-    private fun stopLocationService() {
-        Log.d(TAG, "Stopping service")
-        val serviceIntent = Intent(this, LocationService::class.java).apply {
-            action = LocationService.ACTION_STOP
-        }
-        startService(serviceIntent) // Send stop command
-        isServiceRunning = false
-        updateUI()
+    private fun cancelLocationWork() {
+        Log.d(TAG, "Cancelling work")
+        workManager.cancelUniqueWork(LOCATION_WORK_TAG)
+        Toast.makeText(this, "Location tracking cancelled.", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun observeWorkStatus() {
+        workManager.getWorkInfosForUniqueWorkLiveData(LOCATION_WORK_TAG).observe(this, Observer { workInfos ->
+            val workInfo = workInfos.firstOrNull()
+            isWorkScheduled = workInfo != null && !workInfo.state.isFinished
+            updateUI()
+            workInfo?.let {
+                Log.d(TAG, "Work status changed: ${it.state}")
+            }
+        })
     }
 
     private fun updateUI() {
-        if (isServiceRunning) {
-            binding.toggleButton.text = "Stop Service"
-            binding.statusText.text = "Service Running"
+        if (isWorkScheduled) {
+            binding.toggleButton.text = "Stop Tracking"
+            binding.statusText.text = "Tracking Scheduled"
         } else {
-            binding.toggleButton.text = "Start Service"
-            binding.statusText.text = "Service Stopped"
+            binding.toggleButton.text = "Start Tracking"
+            binding.statusText.text = "Tracking Stopped"
         }
     }
 
     // --- Permission Handling ---
-
     private fun hasFineLocationPermission() =
         ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
     private fun hasBackgroundLocationPermission() =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
-        } else {
-            true // Not needed before Android Q
-        }
+        } else { true }
 
     private val requestFineLocationLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
             if (isGranted) {
-                Log.d(TAG, "ACCESS_FINE_LOCATION granted")
-                checkPermissionsAndStartService() // Re-check to proceed to background permission or start
+                checkPermissionsAndStartWork()
             } else {
-                Log.w(TAG, "ACCESS_FINE_LOCATION denied")
-                // Optionally, show a rationale to the user
+                Toast.makeText(this, "Fine location permission is required.", Toast.LENGTH_SHORT).show()
             }
         }
 
     private val requestBackgroundLocationLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
             if (isGranted) {
-                Log.d(TAG, "ACCESS_BACKGROUND_LOCATION granted")
-                startLocationService()
+                scheduleLocationWork()
             } else {
-                Log.w(TAG, "ACCESS_BACKGROUND_LOCATION denied")
-                // Optionally, show a rationale to the user
+                Toast.makeText(this, "Background location permission is required for tracking.", Toast.LENGTH_SHORT).show()
             }
         }
 
@@ -122,5 +141,6 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
+        private const val LOCATION_WORK_TAG = "LocationTrackerWork"
     }
 }

@@ -1,0 +1,6 @@
+# Configuration for the Location Tracker App
+#
+# The logging interval in minutes.
+# This value determines how often the location is recorded.
+# Note: The minimum interval for WorkManager is 15 minutes.
+loggingIntervalMinutes: 15

@@ -1,0 +1,29 @@
+# Gradle
+.gradle/
+build/
+captures/
+
+# Local configuration file (sdk path, etc)
+local.properties
+
+# IDE files
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Keystore files
+*.jks
+*.keystore
+
+# NDK files
+.externalNativeBuild/
+obj/
+libs/
+
+# Other
+.DS_Store
+*.apk
+*.aab
+*.dex
+output.json
